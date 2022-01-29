@@ -1,0 +1,2 @@
+export MEMBERS_API_KEY=
+export MEMBERS_DEVICE_KEY=
