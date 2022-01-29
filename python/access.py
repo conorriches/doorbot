@@ -1,9 +1,8 @@
 import datetime
 from datetime import date
-from gpiozero import LED
+import RPi.GPIO as GPIO
 import json
 import os
-from pad4pi import rpi_gpio
 import requests
 from RPLCD.i2c import CharLCD
 import time
@@ -13,13 +12,12 @@ resetTime = 0       # Unix time to reset screen to main
 screen = 0          # Screen number to show
 blinkUntil = 0      # Unix time to blink screen until
 blinkTimer = 0      # 
-timeout = 10        # Seconds until screens reset
+timeout = 20        # Seconds until screens reset
 name=""             # User who just entered
 lockPin= 11         # Which pin to unlock door
 error = False
 
 # Setup Devices
-LOCK_RELEASE = LED(lockPin)
 lcd = CharLCD('PCF8574', 0x27)
 KEYPAD = [
   ["1","2","3"],
@@ -27,10 +25,59 @@ KEYPAD = [
   ["7","8","9"],
   ["*","0","#"]
 ]
-ROW_PINS = [4, 14, 15, 17]
-COL_PINS = [18, 27, 22, 23]
-factory = rpi_gpio.KeypadFactory()
-keypad = factory.create_keypad(keypad=KEYPAD, row_pins=ROW_PINS, col_pins=COL_PINS)
+ROW_PINS = [25, 8, 7, 1]
+COL_PINS = [16, 20, 21]
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(lockPin, GPIO.OUT)
+
+for pin in ROW_PINS:
+  GPIO.setup(pin, GPIO.OUT)
+
+for pin in COL_PINS:
+  GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+# Process input from keypad
+def keypadHandler(key):
+  global code
+
+  # Give user more time with each press
+  setReset(True) 
+  print(key)
+
+  if (key=="#"): # enter
+    validateCode()
+  elif (key=="*"): # clear
+    code = []
+  else:
+    code.append(int(key))
+
+def checkKeypad():
+  global KEYPAD
+
+  keypadBounce = 0
+
+  for idr, row in enumerate(ROW_PINS):
+    GPIO.output(row, GPIO.HIGH) # Row HIGH
+    for idc, col in enumerate(COL_PINS): # Read COLs
+      if(GPIO.input(col) == 1):
+
+        # Debounce short presses
+        while(GPIO.input(col) == 1):
+          keypadBounce += 1
+          time.sleep(0.01)
+
+        if(keypadBounce > 10):
+          keypadHandler((KEYPAD[idr][idc]))
+
+        # Wait for release
+        while(GPIO.input(col) == 1):
+          pass
+
+        # Reset debounce
+        keypadBounce = 0;
+
+    GPIO.output(row, GPIO.LOW)
 
 
 # Custom Characters for LCD
@@ -106,9 +153,9 @@ def releaseLock():
   lcd.clear()
   lcd.cursor_pos = (0,0)
   lcd.write_string("\x02 Unlocking")
-  LOCK_RELEASE.on()
+  GPIO.output(lockPin, GPIO.LOW)
   time.sleep(0.5)
-  LOCK_RELEASE.off()
+  GPIO.output(lockPin, GPIO.LOW)
 
 def setScreen(s):
   global screen
@@ -151,8 +198,11 @@ def validateCode(keypad=True):
   
   # Keycodes stored as fobcodes that start with ff
   # Fobs do not ever start with ff
-  prepend = 'ff' if keypad else ''
-  fullCode  = prepend + "".join(code)
+  prepend = ''
+  if(keypad):
+    prepend = 'ff'
+
+  fullCode  = prepend + ''.join(map(str,code))
 
   try:
     with open('../members.csv', 'r') as members_f:
@@ -191,26 +241,6 @@ def checkReset():
     setScreen(0)
     resetTime = 0
     code = []
-
-
-
-# Process input from keypad
-def keypadHandler(key):
-  global code
-
-  # Give user more time with each press
-  setReset(True) 
-  print(key)
-
-  if (key=="#"): # enter
-    validateCode()
-  elif (key=="*"): # clear
-    code = []
-  else:
-    code.append(int(key))
-
-# printKey will be called each time a keypad button is pressed
-keypad.registerKeyPressHandler(keypadHandler)
 
 #
 # Blinking the screen backlight
@@ -311,3 +341,4 @@ while True:
   statusIcon()
   checkReset()
   checkBlink()
+  checkKeypad()
